@@ -1,5 +1,5 @@
 = 1. Record architecture desicions
-:adr: http://thinkrelevance.com/blog/2011/11/15/documenting-architecture-decisions[Documenting Architecture Decisions]
+:adr: http://thinkrelevance.com/blog/2011/11/15/documenting-architecture-decisions
 
 Date: 2025-06-14
 
@@ -14,7 +14,7 @@ We need to record the architectural decisions made on this project.
 == Decision
 
 We will use Architecture Decision Records, as described by Michael Nygard in
-this article: {adr}
+this article: {adr}[Documenting Architecture Decisions]
 
 == Consequences
 

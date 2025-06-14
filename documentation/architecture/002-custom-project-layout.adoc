@@ -1,0 +1,76 @@
+= 2. Custom project layout
+:shebang: https://en.wikipedia.org/wiki/Shebang_(Unix)
+:rdnn: https://en.wikipedia.org/wiki/Reverse_domain_name_notation
+:namingpkgs: https://docs.oracle.com/javase/tutorial/java/package/namingpkgs.html
+
+Date: 0000-00-00
+
+== Status
+
+Accepted
+
+== Context
+
+Java project have a typical project layout that was popularized by maven.
+The convention is roughly:
+
+- `src/main/java` for java source code
+- `src/main/resources` for assets
+- `src/test/java` for java test source code
+- `target` for build output
+
+This layout, combined with the fact, that Java uses folders for modules and packages, leads to very deeply nested folder hierarchies.
+These hierarchies are hard to navigate and understand using typical tools, such as the terminal or a file manager.
+Most Java developers mitigate this problem by relying on IDE features, that give a flattened view over modules/packages.
+
+This creates a soft _dependency_ on complex tooling.
+
+== Decision
+
+Use a custom, simplified project layout, that is specializd for this projects needs.
+
+- `source` for java source code
+- `output` for build output
+- `documentation` for developer docs
+
+INFO:: Notice how semantic names are chosen over abbreviations.
+
+== Consequences
+
+This has profound trade-offs.
+
+- This project is not compatible with typical Java tooling (maven, gradle, IDEs)
+- It is harder to use an LSP
+
+These trade-offs are acceptable, because
+
+- this project aims to discover and invent new Java workflows from first principles
+- this project leans into modern Java (24+) features and JDK-tooling
+- the current Java conventions are dated and very broad
+
+INFO:: In order to understand what is meant by _broad_ conventions, consider these points:
+			 1. The `src/main/java` folder structure from maven supports very complex and polyglot projects.
+				  You can for example, have `src/main/javascript` and other languages in the same project neatly organized.
+			 2. The reverse domain naming convention (e.g. `net.bugabinga.asuran_nexus`) for modules and packages creates very long and repetetive names, that are meant to uniquely identify libraries in the maven repository and prevent name squashing.
+					For applications however, this is mostly a mute point, because these, even when open source, are rarely shared in a global repository.
+					Yet, the convention is _blindly_ followed by most Java developers.
+
+WARN:: Not using the reverse doman naming convention could bite us in the ass later on, when distributing the project to stores such as winget or flatpak, because there this convention is used as well.
+			 It seems however easy to work around, by using the naming convention on the artefact, instead of the source code, so we are not really worried about it.
+
+Another _consequence_ of this custom project layout, is that we cannot rely on normal build tools, such as maven or gradle, to build this project.
+This is however very intentional, since the project aims to focus and rely more on JDK tooling.
+As such, a custom build script will be provided in `build.java`, that servers the same role as typical build tools.
+Since Java can now directly execute source files, it is not hard to run this build script.
+[source=shell]
+----
+java build.java
+----
+It is possible, to shorten this invokation even further, by using a {shebang}[Shebang] construct.
+But since that does not work on windows, and cross-platform development and artefact execution support is a goal, this was omitted in the name of consistency.
+
+== Sources
+
+- {shebang}
+- {rdnn}
+- {namingpkgs}
