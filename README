@@ -3,6 +3,12 @@
 A personal delta chat bot.
 
 ## bootstrap
+```sh
+java build.java bootstrap
+```
+## testing (junit + selfie)
 ## building
-## testing
-## commands
+## JDK man pages
+```sh
+java build.java man [tool]
+```

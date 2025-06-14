@@ -1,0 +1,15 @@
+= 0. Template
+
+Date: 0000-00-00
+
+== Status
+
+Accepted | Proposed | Deprecated
+
+== Context
+
+== Decision
+
+== Consequences
+
+== Source

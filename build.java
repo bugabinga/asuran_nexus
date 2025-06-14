@@ -5,7 +5,6 @@ import java.nio.charset.*;
 import java.security.*;
 import java.time.*;
 import java.util.*;
-import java.util.stream.*;
 import java.util.zip.*;
 
 
@@ -14,6 +13,11 @@ interface build {
 	final boolean build_debug = get_build_debug_environment_variable();
 	final Console cli = System.console();
 	final String[] no_params = new String[0];
+	final String graalvm_version = "24.0.1";
+	// format args: version, os, arch, archive format
+	final String graalvm_download_url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-24.0.1/graalvm-community-jdk-%s_%s-%s_bin.%s";
+	final Path graalvm_directory = Path.of(".graalvm");
+	final String[] empty_string_array = new String[0];
 
 	public static
 	void main(String... arguments)
@@ -29,43 +33,48 @@ interface build {
 				switch (death_code) {
 					case SUCCESS -> {
 						dbg(
-							"Command %s finished successfully in %s!\n",
+							"Command %s finished successfully in %s!%n",
 							command_name,
 							italic(duration.toString())
 						);
-						throw die( death_code);
+						throw die(death_code);
 				}
 				case INVALID_COMMAND -> throw die(
-					"Given command %s does not exist.\n",
 					death_code,
+					"Given command %s does not exist.%n",
+					command_name
+				);
+				case MISSING_PARAMETER -> throw die(
+					death_code,
+					"Given command %s needs at least one parameter.%n",
 					command_name
 				);
 				case UNKNOWN_COMMAND_ARGUMENTS -> throw die(
-					"Unknown arguments %s to command %s.\n",
 					death_code,
+					"Unknown arguments %s to command %s.%n",
 					italic(Arrays.toString(command.parameters())),
 					command_name
 				);
 				case INVALID_CHECKSUM -> throw die(
-					"Command %s failed a checksum test.\n",
 					death_code,
+					"Command %s failed a checksum test.%n",
 					command_name
 				);
 				case BUILD_FAIL ->  throw die(
-					"Command %s failed to execute!\n",
 					death_code ,
+					"Command %s failed to execute!%n",
 					command_name
 				);
 				case COMPILE_FAIL -> throw die(
-					"A bug in the build script in command %s detected!\n",
 					death_code,
+					"A bug in the build script in command %s detected!%n",
 					command_name
 				);
 			}
 		}
 		catch(RuntimeException failure) {
 			if(build_debug) failure.printStackTrace();
-			throw die("Command %s failed to execute!", DeathCode.BUILD_FAIL, command.name());
+			throw die(DeathCode.BUILD_FAIL, "Command %s failed to execute!", command.name());
 		}
 	}
 
@@ -76,8 +85,9 @@ interface build {
 		return switch (input[0]) {
 			case "help" -> new Command.Help(rest);
 			case "bootstrap" -> new Command.Bootstrap(rest);
+			case "man" -> new Command.Man(rest);
 			default -> {
-				cli.format("Unknown command %s given.\n\n", bold_italic(input[0]));
+				cli.format("Unknown command %s given.%n%n", bold_italic(input[0]));
 				yield default_command;
 			}
 		};
@@ -99,10 +109,9 @@ interface build {
 		/// information is printed.
 		record Help(String[] parameters) implements Command {
 			public String name() { return "help"; }
-			public String synopsis() { return "%s [command]".formatted(italic(name())); }
 			public String description() { return "Prints help about all commands or the given subcommand";}
 			public DeathCode execute() throws NoReturn {
-				cli.format("Usage: java %s [command]\n", bold("build.java"));
+				cli.format("Usage: java %s [command]%n", bold("build.java"));
 				for( var command : all_commands()) {
 					final var command_name = command.name();
 					if(parameters.length > 0) {
@@ -110,7 +119,7 @@ interface build {
 						if (!found) continue;
 					}
 					cli.format(
-						"%-20s%s\n",
+						"%-20s%s%n",
 						bold(command_name+':'),
 						command.description()
 					);
@@ -118,6 +127,38 @@ interface build {
 				return DeathCode.SUCCESS;
 			}
 		};
+
+		/// Opens the local man page from the bootstrapped GraalVM-JDK.
+		/// Expects one argument, the name of the JDK command.
+		record Man(String[] parameters) implements Command {
+			public String name() { return "man"; }
+			public String description() { return "Opens up the %s page for given JDK command."
+				.formatted(italic("man"));}
+			public DeathCode execute() throws NoReturn {
+				new Command.Bootstrap(empty_string_array).execute();
+				if(parameters.length == 0) {
+					return DeathCode.MISSING_PARAMETER;
+				}
+				final var jdk_command_name = parameters[0];
+				final var proc = new ProcessBuilder("man", jdk_command_name).inheritIO();
+				final var env = proc.environment();
+				env.put("MANPATH", graalvm_directory.resolve("man").toAbsolutePath().toString());
+				env.put("MANPAGER", "nvim +Man!");
+				try {
+					final var code = proc.start().waitFor();
+					if (code == 0)
+					return DeathCode.SUCCESS;
+					else
+					return DeathCode.BUILD_FAIL;
+				} catch (final IOException | InterruptedException exception) {
+					if(build_debug) exception.printStackTrace();
+					return DeathCode.COMPILE_FAIL;
+				}
+			}
+		}
+
+		// TODO(bugabinga): adr command
+		// TODO(bugabinga): test and build commands
 
 		/// Downloads and caches the latest version of GraalVM Community Editon,
 		/// which will be used by all other commands, that require JDK tools.
@@ -128,14 +169,7 @@ interface build {
 		/// GraalVM will be downloaded to `.graalvm`. In order to force a redownload,
 		/// delete that folder.
 		record Bootstrap(String[] parameters) implements Command {
-
-			private final static String graalvm_version = "24.0.1";
-			// format args: version, os, arch, archive format
-			private final static String graalvm_download_url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-24.0.1/graalvm-community-jdk-%s_%s-%s_bin.%s";
-			private final static Path graalvm_directory = Path.of(".graalvm");
-
 			public String name() { return "bootstrap"; }
-			public String synopsis() { return "%s".formatted(italic(name())); }
 			public String description() {
 				return "Downloads GraalVM Community Edition %s into %s. It will be used as this projects JDK."
 							 .formatted(graalvm_version, italic(".graalvm"));
@@ -146,7 +180,7 @@ interface build {
 				}
 
 				if ( Files.isDirectory(graalvm_directory) ) {
-					dbg("%s already exists. Nothing to do...", graalvm_directory);
+					dbg("%s already exists. Nothing to do...%n", graalvm_directory);
 					return DeathCode.SUCCESS;
 				}
 
@@ -157,9 +191,11 @@ interface build {
 				try {
 					final var temp_graalvm = download(graalvm_download_url, graalvm_version, os, arch, archive_extension);
 					final var temp_checksum_file = download(graalvm_download_url, graalvm_version, os, arch, archive_extension + ".sha256" );
+					dbg("Checking checksum%n");
 					if(sha256_valid(temp_graalvm, temp_checksum_file)){
 						final var extracted = strip_first_component(extract_archive(temp_graalvm));
-						Files.move(extracted, graalvm_directory);
+						dbg("Moving %s into %s%n", extracted.toString(), graalvm_directory.toString());
+						move_directory(extracted, graalvm_directory);
 					}
 					else {
 						return DeathCode.INVALID_CHECKSUM;
@@ -167,13 +203,64 @@ interface build {
 				}
 				catch (IOException exception) {
 					if(build_debug) exception.printStackTrace();
-					throw die("File operation error." , DeathCode.COMPILE_FAIL);
+					throw die(DeathCode.COMPILE_FAIL, "File operation error." );
 				}
 
 				return DeathCode.SUCCESS;
 			}
 		}
 	}
+
+	static void move_directory(Path sourceDir, Path targetDir)
+	throws IOException, NoReturn {
+    if (!Files.isDirectory(sourceDir)) {
+        throw die(DeathCode.COMPILE_FAIL, "Source %s is not a directory.", sourceDir.toString());
+    }
+    if (Files.exists(targetDir) && !Files.isDirectory(targetDir)) {
+        throw die(DeathCode.COMPILE_FAIL, "Target %s exists and is not a directory.", targetDir.toString());
+    }
+
+    try {
+        Files.createDirectories(targetDir);
+        dbg("Created target directory %s%n", targetDir.toString());
+
+        try (final var paths = Files.walk(sourceDir)) {
+					final var path_list = paths.toList();
+						for(var source: path_list) {
+                try {
+                    final var target = targetDir.resolve(sourceDir.relativize(source));
+                    if (Files.isDirectory(source)) {
+                        Files.createDirectories(target);
+                        dbg("Created directory %s%n", target.toString());
+                    } else {
+                        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+                        dbg("Moved %s to %s%n", source.toString(), target.toString());
+                    }
+                } catch (IOException exception) {
+                    if (build_debug) exception.printStackTrace();
+                    throw die(DeathCode.BUILD_FAIL, "Failed to move %s to %s: %s", source.toString(), targetDir.toString(), exception.getMessage());
+                }
+            }
+        }
+
+        try (final var paths = Files.walk(sourceDir)) {
+            final var sorted = paths.sorted((a, b) -> b.toString().length() - a.toString().length()).toList();
+								 for(var path: sorted) {
+                     try {
+                         Files.deleteIfExists(path);
+                         dbg("Deleted %s%n", path.toString());
+                     } catch (IOException exception) {
+                         if (build_debug) exception.printStackTrace();
+                         throw die(DeathCode.BUILD_FAIL, "Failed to delete %s: %s", path.toString(), exception.getMessage());
+                     }
+                 }
+        }
+        dbg("Moved directory %s to %s%n", bold(sourceDir.toString()), bold(targetDir.toString()));
+    } catch (IOException exception) {
+        if (build_debug) exception.printStackTrace();
+        throw die(DeathCode.BUILD_FAIL, "Directory move operation failed: %s", exception.getMessage());
+    }
+}
 
 	final static String github_linux = "linux";
 	final static String github_windows = "windows";
@@ -185,41 +272,87 @@ interface build {
 
 	static Path download(String base_url, String version, String os, String arch, String extension)
 	throws IOException, NoReturn {
-		final var url = String.format(base_url, version, os, arch ,extension);
-		final var temp = Files.createTempFile("graalvm", '.' + extension);
-		try {
-			try(final var stream = new URI(url).toURL().openStream()){
-				Files.copy(stream, temp, StandardCopyOption.REPLACE_EXISTING);
-			}
-			// TODO progress bar
-			return temp;
-		}
-		catch( URISyntaxException exception) {
-			if(build_debug) exception.printStackTrace();
-			throw die("Invalid url %s.", DeathCode.COMPILE_FAIL, url);
-		}
-	}
+    final var url = String.format(base_url, version, os, arch, extension);
+    final var temp = Files.createTempFile("graalvm", '.' + extension);
+    try {
+        final URL source = new URI(url).toURL();
+        final HttpURLConnection conn = (HttpURLConnection) source.openConnection();
+        final long totalSize = conn.getContentLengthLong();
+				final var file = source.getFile();
+				final var last_slash_index = source.getFile().lastIndexOf("/");
+				final var name = file.substring(last_slash_index + 1);
+				cli.format("Downloading: %s%n", name);
+        try (var stream = conn.getInputStream()) {
+            final char BAR_CHAR = '█';
+            final int BAR_WIDTH = 50;
+						final char BAR_LEFT_ENCLOSING = '❰';
+						final char BAR_RIGHT_ENCLOSING = '❱';
+
+            final byte[] buffer = new byte[8192];
+            long downloaded = 0;
+            int bytesRead;
+            try (var out = Files.newOutputStream(temp, StandardOpenOption.WRITE)) {
+                while ((bytesRead = stream.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                    downloaded += bytesRead;
+                    final double progress = totalSize > 0 ? (double) downloaded / totalSize : 0;
+                    final int barProgress = (int) (progress * BAR_WIDTH);
+                    final StringBuilder bar = new StringBuilder(ANSI.CYAN.escape() + ANSI.BOLD.escape() + BAR_LEFT_ENCLOSING );
+                    for (int i = 0; i < BAR_WIDTH; i++) {
+                        bar.append(i < barProgress ? ANSI.MAGENTA.escape() + BAR_CHAR : " ");
+                    }
+                    bar.append(ANSI.CYAN.escape() + BAR_RIGHT_ENCLOSING + ANSI.RESET.escape());
+                    final String percentage = String.format("%.1f", progress * 100);
+                    final String sizeInfo = totalSize > 0 
+                        ? String.format("%s/%s", format_size(downloaded), format_size(totalSize))
+                        : String.format("%s", format_size(downloaded));
+
+                    cli.format(
+                    	"\r" +
+											ANSI.BOLD.escape() + "Downloading: " +
+											bar + " " +
+											percentage + "%%" + " " +
+											sizeInfo
+                    );
+                }
+            }
+						cli.format("%n");
+        }
+        return temp;
+    } catch (URISyntaxException exception) {
+        if (build_debug) exception.printStackTrace();
+        throw die(DeathCode.COMPILE_FAIL, "Invalid url %s.", url);
+    }
+}
+
+static String format_size(long bytes) {
+    if (bytes < 1024) return bytes + " B";
+    final int exp = (int) (Math.log(bytes) / Math.log(1024));
+    final String unit = "KMGTPE".charAt(exp - 1) + "B";
+    return String.format("%.1f %s", bytes / Math.pow(1024, exp), unit);
+}
 
 	static boolean sha256_valid( Path file, Path checksum_file)
 	throws IOException, NoReturn {
 		try {
-			String expectedChecksum = Files.readString(checksum_file).trim().toLowerCase();
+			final String expectedChecksum = Files.readString(checksum_file).trim().toLowerCase();
 
-			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			final MessageDigest digest = MessageDigest.getInstance("SHA-256");
 			try (InputStream is = Files.newInputStream(file)) {
-					byte[] buffer = new byte[8192];
+					final byte[] buffer = new byte[8192];
 					int bytes_read;
 					while ((bytes_read = is.read(buffer)) != -1) {
 							digest.update(buffer, 0, bytes_read);
 					}
 			}
-			byte[] hash = digest.digest();
-			String computedChecksum = bytes_to_hex(hash).toLowerCase();
+			final byte[] hash = digest.digest();
+			final String computedChecksum = bytes_to_hex(hash).toLowerCase();
 
+			dbg("Expected checksum: %s, copmuted cecksum: %s%n", expectedChecksum, computedChecksum);
 			return expectedChecksum.equals(computedChecksum);
     } catch (NoSuchAlgorithmException | IOException e) {
     	if (build_debug) e.printStackTrace();
-			throw die("Your JDK has no SHA256?!", DeathCode.COMPILE_FAIL);
+			throw die(DeathCode.COMPILE_FAIL, "Your JDK has no SHA256?!");
     }
 	}
 
@@ -234,12 +367,12 @@ interface build {
 	static Path strip_first_component( Path directory )
 		throws IOException, NoReturn {
 		if (!Files.isDirectory(directory)){
-			throw die("Path %s is not a directory!", DeathCode.COMPILE_FAIL, directory.toString());
+			throw die(DeathCode.COMPILE_FAIL, "Path %s is not a directory!", directory.toString());
 		}
 
 		return Files.list(directory)
 								.findFirst()
-								.orElseThrow(()-> die("Directory %s is empty!", DeathCode.COMPILE_FAIL, directory));
+								.orElseThrow(()-> die(DeathCode.COMPILE_FAIL, "Directory %s is empty!", directory));
 	}
 
 	static Path extract_archive( Path archive ) 
@@ -255,7 +388,7 @@ interface build {
             while ((entry = zis.getNextEntry()) != null) {
                 final var entry_path = extract_dir.resolve(entry.getName()).normalize();
                 if (!entry_path.startsWith(extract_dir)) {
-                    throw die("Invalid ZIP archive: path traversal detected in %s.", DeathCode.COMPILE_FAIL, entry.getName());
+                    throw die(DeathCode.COMPILE_FAIL, "Invalid ZIP archive: path traversal detected in %s.", entry.getName());
                 }
                 if (entry.isDirectory()) {
                     Files.createDirectories(entry_path);
@@ -267,7 +400,7 @@ interface build {
             }
         } catch (ZipException e) {
 						if(build_debug) e.printStackTrace();
-            throw die("Invalid ZIP archive.", DeathCode.COMPILE_FAIL);
+            throw die(DeathCode.COMPILE_FAIL, "Invalid ZIP archive.");
         }
     } else if (file_name.endsWith(".tar.gz")) {
         try (final var fis = Files.newInputStream(archive);
@@ -279,7 +412,7 @@ interface build {
                 int bytes_read = read_fully(gzis, buffer, 512);
                 if (bytes_read == 0) break; // End of archive
                 if (bytes_read != 512) {
-                    throw die("Invalid tar.gz archive: incomplete header block", DeathCode.COMPILE_FAIL);
+                    throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: incomplete header block");
                 }
 
                 // Check if header is all zeros (end of archive marker)
@@ -295,7 +428,7 @@ interface build {
                 // Parse header
                 final var name = new String(buffer, 0, 100, StandardCharsets.US_ASCII).trim();
                 if (name.isEmpty()) {
-                    throw die("Invalid tar.gz archive: empty file name", DeathCode.COMPILE_FAIL);
+                    throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: empty file name");
                 }
                 final var size_str = new String(buffer, 124, 12, StandardCharsets.US_ASCII).trim();
                 long size;
@@ -303,14 +436,14 @@ interface build {
                     size = Long.parseLong(size_str, 8); // Octal
                 } catch (NumberFormatException e) {
 										if(build_debug) e.printStackTrace();
-                    throw die("Invalid tar.gz archive: invalid file size in header", DeathCode.COMPILE_FAIL);
+                    throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: invalid file size in header");
                 }
                 final char type_flag = (char) buffer[156]; // Typeflag at offset 156
 
                 // Resolve entry path and prevent path traversal
                 final var entry_path = extract_dir.resolve(name).normalize();
                 if (!entry_path.startsWith(extract_dir)) {
-                    throw die("Invalid tar.gz archive: path traversal detected in %s.", DeathCode.COMPILE_FAIL, name);
+                    throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: path traversal detected in %s.", name);
                 }
 
                 // Handle entry based on type
@@ -323,7 +456,7 @@ interface build {
                             int toRead = (int) Math.min(dataBuffer.length, bytesToRead);
                             int read = read_fully(gzis, dataBuffer, toRead);
                             if (read == 0) {
-                                throw die("Invalid tar.gz archive: unexpected end of file data", DeathCode.COMPILE_FAIL);
+                                throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: unexpected end of file data");
                             }
                             fos.write(dataBuffer, 0, read);
                             bytesToRead -= read;
@@ -353,10 +486,10 @@ interface build {
             }
         } catch (IOException e) {
 						if(build_debug) e.printStackTrace();
-            throw die("Invalid tar.gz archive: ", DeathCode.COMPILE_FAIL);
+            throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: ");
         }
     } else {
-        throw die("Unsupported archive format: %s.", DeathCode.COMPILE_FAIL, file_name);
+        throw die(DeathCode.COMPILE_FAIL, "Unsupported archive format: %s.", file_name);
     }
 
     return extract_dir;
@@ -378,14 +511,14 @@ interface build {
 		return switch (github_os) {
 			case github_windows -> github_windows_archive_extension;
 			case github_linux, github_macos -> github_unix_archive_extension;
-			default -> throw die("Unknown OS %s. Cannot determine archive extension.", DeathCode.COMPILE_FAIL, github_os);
+			default -> throw die(DeathCode.COMPILE_FAIL, "Unknown OS %s. Cannot determine archive extension.", github_os);
 		};
 	}
 	static String determine_arch() throws NoReturn {
 		final var arch = System.getProperty("os.arch").toLowerCase();
 		if (arch.contains("amd64") || arch.contains("x86_64")) return github_x64;
 		if (arch.contains("aarch64")) return github_aarch64;
-		throw die("Architecture %s is not supported by GrtaalVM.", DeathCode.COMPILE_FAIL, arch);
+		throw die(DeathCode.COMPILE_FAIL, "Architecture %s is not supported by GrtaalVM.", arch);
 
 	}
 	static String determine_os() throws NoReturn {
@@ -393,7 +526,7 @@ interface build {
 		if (os.contains("win")) return github_windows;
 		if (os.contains("mac")) return github_macos;
 		if (os.contains("linux")) return github_linux;
-		throw die("Operating system %s is not supported by GraalVM.", DeathCode.COMPILE_FAIL, os);
+		throw die(DeathCode.COMPILE_FAIL, "Operating system %s is not supported by GraalVM.", os);
 	}
 
 	static boolean linear_search( Object needle, Object[] haystack ) {
@@ -410,7 +543,7 @@ interface build {
 	/// @see String#format(java.lang.String, java.lang.Object...)
 	static void dbg(String message, Object... arguments) {
 		if (build_debug)
-			System.err.printf(message, arguments);
+			System.err.printf("⦗dbg⦘ " + message, arguments);
 	}
 
 	/// Returns the `BUILD_DEBUG` property from the environment.
@@ -451,6 +584,8 @@ interface build {
 		UNKNOWN_COMMAND_ARGUMENTS(555),
 		/// Build script received invalid input command.
 		INVALID_COMMAND(666),
+		/// Some parameter for some command is missing.
+		MISSING_PARAMETER(667),
 		/// Some build step failed during execution.
 		BUILD_FAIL(777),
 		/// An error in the build script, that should have been a compile time error, if Java could.
@@ -469,8 +604,8 @@ interface build {
 	}
 
 	/// Terminates the build script with given `reason` and [code](DeathCode).
-	static NoReturn die(String reason, DeathCode code, Object... arguments ) {
-		dbg(reason+'\n', arguments);
+	static NoReturn die(DeathCode code, String reason, Object... arguments ) {
+		dbg(reason+"%n", arguments);
 		return die(code);
 	}
 
@@ -486,6 +621,14 @@ interface build {
 		BOLD("\u001B[1m"),
 		ITALIC("\u001B[3m"),
 		BOLD_ITALIC("\u001B[1;3m"),
+		BLACK( "\u001B[30m" ),
+		RED( "\u001B[31m" ),
+		GREEN( "\u001B[32m" ),
+		YELLOW( "\u001B[33m" ),
+		BLUE( "\u001B[34m" ),
+		MAGENTA( "\u001B[35m" ),
+		CYAN( "\u001B[36m" ),
+		WHITE( "\u001B[37m" ),
 		;
 
 		private String escape;
@@ -539,7 +682,7 @@ interface build {
 						commands[index] = instance;
 				} catch (Exception e) {
 						if (build_debug) e.printStackTrace();
-						throw die("Failed to instantiate %s. %s" ,DeathCode.COMPILE_FAIL, clazz.getName(), e.getMessage());
+						throw die(DeathCode.COMPILE_FAIL, "Failed to instantiate %s. %s" ,clazz.getName(), e.getMessage());
 				}
 			}
 		return commands;

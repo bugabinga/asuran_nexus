@@ -1,0 +1,25 @@
+= 1. Record architecture desicions
+:adr: http://thinkrelevance.com/blog/2011/11/15/documenting-architecture-decisions[Documenting Architecture Decisions]
+
+Date: 2025-06-14
+
+== Status
+
+Accepted
+
+== Context
+
+We need to record the architectural decisions made on this project.
+
+== Decision
+
+We will use Architecture Decision Records, as described by Michael Nygard in
+this article: {adr}
+
+== Consequences
+
+See Michael Nygard's article, linked above.
+
+== Sources
+
+- {adr}
