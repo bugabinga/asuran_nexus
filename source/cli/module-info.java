@@ -1,0 +1,3 @@
+module cli {
+	exports main;
+}

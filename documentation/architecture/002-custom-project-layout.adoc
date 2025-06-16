@@ -3,7 +3,7 @@
 :rdnn: https://en.wikipedia.org/wiki/Reverse_domain_name_notation
 :namingpkgs: https://docs.oracle.com/javase/tutorial/java/package/namingpkgs.html
 
-Date: 0000-00-00
+Date: 2025-06-14
 
 == Status
 

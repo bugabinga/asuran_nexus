@@ -1,0 +1,16 @@
+= Architecture decisions for Asuran Nexus
+Oliver Jan Krylow<oliver@bugabinga.net>
+:toc:
+:toclevels: 1
+
+include::001-architecture-decision-records.adoc[leveloffset=1]
+
+include::002-custom-project-layout.adoc[leveloffset=1]
+
+include::003-graalvm.adoc[leveloffset=1]
+
+include::004-build-script.adoc[leveloffset=1]
+
+include::005-testing.adoc[leveloffset=1]
+
+include::006-dependencies.adoc[leveloffset=1]

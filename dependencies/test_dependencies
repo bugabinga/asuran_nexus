@@ -1,0 +1,3 @@
+pkg://org.junit.jupiter/junit-jupiter-api@5.13.1
+pkg://org.junit.jupiter/junit-jupiter-params@5.13.1
+pkg://com.diffplug.selfie/selfie-runner-junit5@2.5.3

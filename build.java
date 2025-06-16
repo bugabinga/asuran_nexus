@@ -7,16 +7,19 @@ import java.time.*;
 import java.util.*;
 import java.util.zip.*;
 
-
 /// Custom build script
 interface build {
 	final boolean build_debug = get_build_debug_environment_variable();
 	final Console cli = System.console();
 	final String[] no_params = new String[0];
 	final String graalvm_version = "24.0.1";
-	// format args: version, os, arch, archive format
-	final String graalvm_download_url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-24.0.1/graalvm-community-jdk-%s_%s-%s_bin.%s";
+	// format args: version, version, os, arch, archive format
+	final String graalvm_download_url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-%s/graalvm-community-jdk-%s_%s-%s_bin.%s";
 	final Path graalvm_directory = Path.of(".graalvm");
+	final String jresolve_version = "v2025.02.15";
+	// format args: version
+	final String jresolve_download_url = "https://github.com/bowbahdoe/jresolve-cli/releases/download/%s/jresolve.jar";
+	final Path jresolve_directory = Path.of(".jresolve");
 	final String[] empty_string_array = new String[0];
 
 	public static
@@ -180,30 +183,49 @@ interface build {
 				}
 
 				if ( Files.isDirectory(graalvm_directory) ) {
-					dbg("%s already exists. Nothing to do...%n", graalvm_directory);
-					return DeathCode.SUCCESS;
+					dbg("%s already exists. Nothing to do...%n", graalvm_directory );
+				}
+				else {
+					final var os = determine_os();
+					final var arch = determine_arch();
+					final var archive_extension = determine_archive_extension(os);
+
+					try {
+						final var graalvm_url = String.format(graalvm_download_url, graalvm_version, graalvm_version, os, arch, archive_extension);
+						final var graalvm_temp = Files.createTempFile("graalvm", '.' + archive_extension);
+						download(graalvm_url, graalvm_temp);
+						final var graalvm_sha256_url = String.format(graalvm_download_url, graalvm_version, graalvm_version, os, arch, archive_extension + ".sha256" );
+						final var graalvm_sha256_temp = Files.createTempFile("graalvm_sha256", '.' + archive_extension + ".sha256" );
+						download(graalvm_sha256_url, graalvm_sha256_temp);
+						if(sha256_valid(graalvm_temp, graalvm_sha256_temp )){
+							final var extracted = strip_first_component(extract_archive(graalvm_temp));
+							dbg("Moving %s into %s%n", extracted.toString(), graalvm_directory.toString());
+							move_directory(extracted, graalvm_directory);
+						}
+						else {
+							return DeathCode.INVALID_CHECKSUM;
+						}
+					}
+					catch (IOException exception) {
+						if(build_debug) exception.printStackTrace();
+						throw die(DeathCode.COMPILE_FAIL, "File operation error." );
+					}
 				}
 
-				final var os = determine_os();
-				final var arch = determine_arch();
-				final var archive_extension = determine_archive_extension(os);
-
-				try {
-					final var temp_graalvm = download(graalvm_download_url, graalvm_version, os, arch, archive_extension);
-					final var temp_checksum_file = download(graalvm_download_url, graalvm_version, os, arch, archive_extension + ".sha256" );
-					dbg("Checking checksum%n");
-					if(sha256_valid(temp_graalvm, temp_checksum_file)){
-						final var extracted = strip_first_component(extract_archive(temp_graalvm));
-						dbg("Moving %s into %s%n", extracted.toString(), graalvm_directory.toString());
-						move_directory(extracted, graalvm_directory);
+				if ( Files.isDirectory(jresolve_directory) ) {
+					dbg("%s already exists. Nothing to do...%n", jresolve_directory );
+				} else {
+					try {
+						final var jresolve_url = String.format(jresolve_download_url, jresolve_version);
+						final var jresolve_temp = Files.createTempFile("jresolve", ".jar" );
+						download(jresolve_url, jresolve_temp);
+						Files.createDirectories(jresolve_directory);
+						Files.move(jresolve_temp, jresolve_directory.resolve("jresolve.jar"));
 					}
-					else {
-						return DeathCode.INVALID_CHECKSUM;
+					catch (IOException exception) {
+						if(build_debug) exception.printStackTrace();
+						throw die(DeathCode.COMPILE_FAIL, "File operation error." );
 					}
-				}
-				catch (IOException exception) {
-					if(build_debug) exception.printStackTrace();
-					throw die(DeathCode.COMPILE_FAIL, "File operation error." );
 				}
 
 				return DeathCode.SUCCESS;
@@ -270,10 +292,8 @@ interface build {
 	final static String github_unix_archive_extension = "tar.gz";
 	final static String github_windows_archive_extension = "zip";
 
-	static Path download(String base_url, String version, String os, String arch, String extension)
+	static Path download(final String url, final Path temp)
 	throws IOException, NoReturn {
-    final var url = String.format(base_url, version, os, arch, extension);
-    final var temp = Files.createTempFile("graalvm", '.' + extension);
     try {
         final URL source = new URI(url).toURL();
         final HttpURLConnection conn = (HttpURLConnection) source.openConnection();
