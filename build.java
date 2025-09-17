@@ -1,22 +1,25 @@
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
+import java.nio.file.attribute.*;
 import java.nio.charset.*;
 import java.security.*;
 import java.time.*;
 import java.util.*;
+import java.util.regex.*;
 import java.util.zip.*;
 
 /// Custom build script
 interface build {
+	final String graalvm_version = "25.0.0";
+	final String jresolve_version = "v2025.02.15";
+
 	final boolean build_debug = get_build_debug_environment_variable();
 	final Console cli = System.console();
 	final String[] no_params = new String[0];
-	final String graalvm_version = "24.0.1";
 	// format args: version, version, os, arch, archive format
 	final String graalvm_download_url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-%s/graalvm-community-jdk-%s_%s-%s_bin.%s";
 	final Path graalvm_directory = Path.of(".graalvm");
-	final String jresolve_version = "v2025.02.15";
 	// format args: version
 	final String jresolve_download_url = "https://github.com/bowbahdoe/jresolve-cli/releases/download/%s/jresolve.jar";
 	final Path jresolve_directory = Path.of(".jresolve");
@@ -105,9 +108,7 @@ interface build {
 		String description();
 		String[] parameters();
 		DeathCode execute() throws NoReturn ;
-
 		/// Prints usage information about the build script and all subcommands.
-		///
 		/// If the name of any other command is given as parameter, only its help
 		/// information is printed.
 		record Help(String[] parameters) implements Command {
@@ -181,37 +182,54 @@ interface build {
 				if (parameters().length != 0) {
 					return DeathCode.UNKNOWN_COMMAND_ARGUMENTS;
 				}
-
 				if ( Files.isDirectory(graalvm_directory) ) {
-					dbg("%s already exists. Nothing to do...%n", graalvm_directory );
-				}
-				else {
-					final var os = determine_os();
-					final var arch = determine_arch();
-					final var archive_extension = determine_archive_extension(os);
-
 					try {
-						final var graalvm_url = String.format(graalvm_download_url, graalvm_version, graalvm_version, os, arch, archive_extension);
-						final var graalvm_temp = Files.createTempFile("graalvm", '.' + archive_extension);
-						download(graalvm_url, graalvm_temp);
-						final var graalvm_sha256_url = String.format(graalvm_download_url, graalvm_version, graalvm_version, os, arch, archive_extension + ".sha256" );
-						final var graalvm_sha256_temp = Files.createTempFile("graalvm_sha256", '.' + archive_extension + ".sha256" );
-						download(graalvm_sha256_url, graalvm_sha256_temp);
-						if(sha256_valid(graalvm_temp, graalvm_sha256_temp )){
-							final var extracted = strip_first_component(extract_archive(graalvm_temp));
-							dbg("Moving %s into %s%n", extracted.toString(), graalvm_directory.toString());
-							move_directory(extracted, graalvm_directory);
+						final var release_file = Files.readAllLines(graalvm_directory.resolve("release"));
+						final var version_pattern = Pattern.compile("GRAALVM_VERSION=\"(.*)\"");
+						final var current_version = release_file.stream()
+							.filter(line -> line.startsWith("GRAALVM_VERSION"))
+							.map(line -> version_pattern.matcher(line))
+							.filter( Matcher::matches )
+							.map( matcher -> matcher.group(1))
+							.findAny()
+							.orElseThrow(()-> die(DeathCode.BUILD_FAIL, "Could not find current version in release file"));
+						dbg("Current GraalVm version is %s.%n", current_version);
+						if(Objects.equals(graalvm_version, current_version)) {
+							dbg("%s already exists and version %s matches. Nothing to do...%n", graalvm_directory, current_version);
+							return DeathCode.SUCCESS;
+						} else {
+							delete_directory(graalvm_directory);
 						}
-						else {
-							return DeathCode.INVALID_CHECKSUM;
+					} catch (final IOException exception) {
+						if(build_debug) {
+							exception.printStackTrace();
 						}
-					}
-					catch (IOException exception) {
-						if(build_debug) exception.printStackTrace();
-						throw die(DeathCode.COMPILE_FAIL, "File operation error." );
+						throw die(DeathCode.BUILD_FAIL, "Could not read %s.", graalvm_directory);
 					}
 				}
-
+				final var os = determine_os();
+				final var arch = determine_arch();
+				final var archive_extension = determine_archive_extension(os);
+				try {
+					final var graalvm_url = String.format(graalvm_download_url, graalvm_version, graalvm_version, os, arch, archive_extension);
+					final var graalvm_temp = Files.createTempFile("graalvm", '.' + archive_extension);
+					download(graalvm_url, graalvm_temp);
+					final var graalvm_sha256_url = String.format(graalvm_download_url, graalvm_version, graalvm_version, os, arch, archive_extension + ".sha256" );
+					final var graalvm_sha256_temp = Files.createTempFile("graalvm_sha256", '.' + archive_extension + ".sha256" );
+					download(graalvm_sha256_url, graalvm_sha256_temp);
+					if(sha256_valid(graalvm_temp, graalvm_sha256_temp )){
+						final var extracted = strip_first_component(extract_archive(graalvm_temp));
+						dbg("Moving %s into %s%n", extracted.toString(), graalvm_directory.toString());
+						move_directory(extracted, graalvm_directory);
+					}
+					else {
+						return DeathCode.INVALID_CHECKSUM;
+					}
+				}
+				catch (IOException exception) {
+					if(build_debug) exception.printStackTrace();
+					throw die(DeathCode.COMPILE_FAIL, "File operation error." );
+				}
 				if ( Files.isDirectory(jresolve_directory) ) {
 					dbg("%s already exists. Nothing to do...%n", jresolve_directory );
 				} else {
@@ -227,7 +245,6 @@ interface build {
 						throw die(DeathCode.COMPILE_FAIL, "File operation error." );
 					}
 				}
-
 				return DeathCode.SUCCESS;
 			}
 		}
@@ -323,7 +340,7 @@ interface build {
                     }
                     bar.append(ANSI.CYAN.escape() + BAR_RIGHT_ENCLOSING + ANSI.RESET.escape());
                     final String percentage = String.format("%.1f", progress * 100);
-                    final String sizeInfo = totalSize > 0 
+                    final String sizeInfo = totalSize > 0
                         ? String.format("%s/%s", format_size(downloaded), format_size(totalSize))
                         : String.format("%s", format_size(downloaded));
 
@@ -343,6 +360,31 @@ interface build {
         if (build_debug) exception.printStackTrace();
         throw die(DeathCode.COMPILE_FAIL, "Invalid url %s.", url);
     }
+}
+
+static void delete_directory(final Path directory)
+throws NoReturn
+{
+		if (Files.exists(directory)) {
+				try (final var dir = Files.walk(directory)) {
+						dir.sorted(Comparator.reverseOrder())
+									.forEach(path -> {
+											try {
+													Files.delete(path);
+											} catch (IOException exception) {
+													if(build_debug) {
+														exception.printStackTrace();
+													}
+													die(DeathCode.BUILD_FAIL, "Could not delete %s.",directory);
+											}
+									});
+				} catch (final IOException exception) {
+						if(build_debug) {
+							exception.printStackTrace();
+						}
+						throw die(DeathCode.BUILD_FAIL, "Could not read %s.",directory);
+			}
+		}
 }
 
 static String format_size(long bytes) {
@@ -395,7 +437,22 @@ static String format_size(long bytes) {
 								.orElseThrow(()-> die(DeathCode.COMPILE_FAIL, "Directory %s is empty!", directory));
 	}
 
-	static Path extract_archive( Path archive ) 
+	static Set<PosixFilePermission> get_posix_file_permissions_from_octal_mode(final int octal_mode) {
+			final Set<PosixFilePermission> permissions = EnumSet.noneOf(PosixFilePermission.class);
+			final int mode_bits = octal_mode & 0777;
+			if ((mode_bits & 0400) != 0) permissions.add(PosixFilePermission.OWNER_READ);
+			if ((mode_bits & 0200) != 0) permissions.add(PosixFilePermission.OWNER_WRITE);
+			if ((mode_bits & 0100) != 0) permissions.add(PosixFilePermission.OWNER_EXECUTE);
+			if ((mode_bits & 0040) != 0) permissions.add(PosixFilePermission.GROUP_READ);
+			if ((mode_bits & 0020) != 0) permissions.add(PosixFilePermission.GROUP_WRITE);
+			if ((mode_bits & 0010) != 0) permissions.add(PosixFilePermission.GROUP_EXECUTE);
+			if ((mode_bits & 0004) != 0) permissions.add(PosixFilePermission.OTHERS_READ);
+			if ((mode_bits & 0002) != 0) permissions.add(PosixFilePermission.OTHERS_WRITE);
+			if ((mode_bits & 0001) != 0) permissions.add(PosixFilePermission.OTHERS_EXECUTE);
+			return permissions;
+	}
+
+	static Path extract_archive( Path archive )
 		throws IOException, NoReturn {
 
     final var file_name = archive.getFileName().toString().toLowerCase();
@@ -458,6 +515,14 @@ static String format_size(long bytes) {
 										if(build_debug) e.printStackTrace();
                     throw die(DeathCode.COMPILE_FAIL, "Invalid tar.gz archive: invalid file size in header");
                 }
+								final var mode_str = new String(buffer, 100, 8, StandardCharsets.US_ASCII).trim();
+                int mode;
+                try {
+                    mode = Integer.parseInt(mode_str, 8);
+                } catch (NumberFormatException e) {
+                    if (build_debug) e.printStackTrace();
+                    mode = 0644; // Default to readable non-executable on parse fail
+                }
                 final char type_flag = (char) buffer[156]; // Typeflag at offset 156
 
                 // Resolve entry path and prevent path traversal
@@ -487,8 +552,28 @@ static String format_size(long bytes) {
                     if (padding > 0) {
                         read_fully(gzis, new byte[(int) padding], (int) padding);
                     }
+										// Set file permissions if on a POSIX system
+                    if (Files.getFileStore(entry_path).supportsFileAttributeView(PosixFileAttributeView.class)) {
+                        try {
+                            final var permissions = get_posix_file_permissions_from_octal_mode(mode);
+                            Files.setPosixFilePermissions(entry_path, permissions);
+                        } catch (final IOException | UnsupportedOperationException ignored) {
+                            // Ignore permission setting failures (e.g., non-POSIX FS)
+														dbg("Failed to set permissions on %s: %s%n", entry_path, ignored.getMessage());
+                        }
+										}
                 } else if (type_flag == '5') { // Directory
                     Files.createDirectories(entry_path);
+										// Set directory permissions if on a POSIX system
+                    if (Files.getFileStore(entry_path).supportsFileAttributeView(PosixFileAttributeView.class)) {
+                        try {
+                            final var permissions = get_posix_file_permissions_from_octal_mode(mode);
+                            Files.setPosixFilePermissions(entry_path, permissions);
+                        } catch (final IOException | UnsupportedOperationException ignored) {
+                            // Ignore permission setting failures
+														dbg("Failed to set permissions on %s: %s%n", entry_path, ignored.getMessage());
+                        }
+										}
                 } else {
                     // Skip unsupported types (e.g., links)
                     long bytes_to_skip = size;
