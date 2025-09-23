@@ -13,6 +13,7 @@ import java.util.zip.*;
 interface build {
 	final String graalvm_version = "25.0.0";
 	final String jresolve_version = "v2025.02.15";
+	final String deltachat_core_version = "2.15.0";
 
 	final boolean build_debug = get_build_debug_environment_variable();
 	final Console cli = System.console();
@@ -24,6 +25,13 @@ interface build {
 	final String jresolve_download_url = "https://github.com/bowbahdoe/jresolve-cli/releases/download/%s/jresolve.jar";
 	final Path jresolve_directory = Path.of(".jresolve");
 	final String[] empty_string_array = new String[0];
+	//format args: version
+	final String deltachat_core_download_url = "https://github.com/chatmail/core/archive/refs/tags/v%s.zip";
+	final Path deltachat_core_directory = Path.of(".deltachat");
+	// as long as jextract only publishes early-access builds, we do not bother with a version format
+	final String jextract_download_url = "https://download.java.net/java/early_access/jextract/22/6/openjdk-22-jextract+6-47_linux-x64_bin.tar.gz";
+	final Path jextract_directory = Path.of(".jextract");
+	//TODO: sudo xattr -r -d com.apple.quarantine path/to/jextract/folder/ on macos
 
 	public static
 	void main(String... arguments)
@@ -163,6 +171,7 @@ interface build {
 
 		// TODO(bugabinga): adr command
 		// TODO(bugabinga): test and build commands
+		// TODO(bugabinga): watch commands
 
 		/// Downloads and caches the latest version of GraalVM Community Editon,
 		/// which will be used by all other commands, that require JDK tools.
@@ -193,7 +202,7 @@ interface build {
 							.map( matcher -> matcher.group(1))
 							.findAny()
 							.orElseThrow(()-> die(DeathCode.BUILD_FAIL, "Could not find current version in release file"));
-						dbg("Current GraalVm version is %s.%n", current_version);
+						dbg("Current GraalVM version is %s.%n", current_version);
 						if(Objects.equals(graalvm_version, current_version)) {
 							dbg("%s already exists and version %s matches. Nothing to do...%n", graalvm_directory, current_version);
 							return DeathCode.SUCCESS;
@@ -228,27 +237,58 @@ interface build {
 				}
 				catch (IOException exception) {
 					if(build_debug) exception.printStackTrace();
-					throw die(DeathCode.COMPILE_FAIL, "File operation error." );
+					throw die(DeathCode.BUILD_FAIL, "File operation error." );
 				}
 				if ( Files.isDirectory(jresolve_directory) ) {
-					dbg("%s already exists. Nothing to do...%n", jresolve_directory );
-				} else {
-					try {
-						final var jresolve_url = String.format(jresolve_download_url, jresolve_version);
-						final var jresolve_temp = Files.createTempFile("jresolve", ".jar" );
-						download(jresolve_url, jresolve_temp);
-						Files.createDirectories(jresolve_directory);
-						Files.move(jresolve_temp, jresolve_directory.resolve("jresolve.jar"));
+					try( final var jar = new ZipFile(jresolve_directory.resolve("jresolve.jar").toFile())){
+						final var properties = jar.getEntry("META-INF/maven/dev.mccue/jresolve-cli/pom.properties");
+						try(final var input = jar.getInputStream(properties)) {
+							final var bytes = input.readAllBytes();
+							final var needle = new byte[]{'v','e','r','s','i','o','n','='};
+							final var begin = index_of(bytes, needle) + needle.length;
+							// assume the version property is last, end of file
+							final var slice = Arrays.copyOfRange(bytes,begin,bytes.length);
+							if(Objects.equals(slice, jresolve_version.getBytes())){
+								dbg("%s already exists. Nothing to do...%n", jresolve_directory );
+								return DeatchCode.SUCCESS;
+							}
+							else {
+								delete_directory(jresolve_directory);
+							}
+						}
 					}
-					catch (IOException exception) {
-						if(build_debug) exception.printStackTrace();
-						throw die(DeathCode.COMPILE_FAIL, "File operation error." );
-					}
+				}
+				try {
+					final var jresolve_url = String.format(jresolve_download_url, jresolve_version);
+					final var jresolve_temp = Files.createTempFile("jresolve", ".jar" );
+					download(jresolve_url, jresolve_temp);
+					Files.createDirectories(jresolve_directory);
+					Files.move(jresolve_temp, jresolve_directory.resolve("jresolve.jar"));
+				}
+				catch (IOException exception) {
+					if(build_debug) exception.printStackTrace();
+					throw die(DeathCode.BUILD_FAIL, "File operation error." );
 				}
 				return DeathCode.SUCCESS;
 			}
 		}
 	}
+
+ static int index_of(byte[] data, byte[] pattern) {
+        if (pattern.length == 0) return 0;
+        if (pattern.length > data.length) return -1;
+
+        for (int i = 0; i <= data.length - pattern.length; i++) {
+            int j = 0;
+            while (j < pattern.length && data[i + j] == pattern[j]) {
+                j++;
+            }
+            if (j == pattern.length) {
+                return i;
+            }
+        }
+        return -1;
+    }
 
 	static void move_directory(Path sourceDir, Path targetDir)
 	throws IOException, NoReturn {
